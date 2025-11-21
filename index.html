@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Player</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/color-thief/2.3.0/color-thief.umd.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden; /* Prevent scroll on body, handle in app */
+            transition: background 1s ease;
+        }
+
+        /* Custom Scrollbar for playlist */
+        .playlist-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .playlist-scroll::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .playlist-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+        .playlist-scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        /* Range Slider Styling */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 12px;
+            width: 12px;
+            border-radius: 50%;
+            background: #fff;
+            cursor: pointer;
+            margin-top: -4px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+        }
+
+        /* Waveform Canvas Container */
+        #waveform-container {
+            position: relative;
+            width: 100%;
+            height: 280px; /* Slightly smaller height */
+            overflow: hidden;
+            mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+        }
+        
+        /* Spinner Animation */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-fast {
+            animation: spin 0.6s linear infinite;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen text-white flex items-center justify-center bg-gray-900">
+
+    <div id="bg-layer" class="absolute inset-0 z-0 transition-colors duration-1000 ease-in-out bg-gradient-to-br from-purple-900 to-black opacity-80"></div>
+    <div class="absolute inset-0 z-0 bg-black/40"></div>
+
+    <div id="start-modal" class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity duration-500">
+        
+        <div id="recaptcha-widget" class="bg-[#f9f9f9] border border-[#d3d3d3] rounded shadow-[0_2px_4px_rgba(0,0,0,0.1)] p-3 w-[304px] h-[78px] flex items-center justify-between select-none scale-110 md:scale-125 transition-all">
+            
+            <div class="flex items-center gap-3 pl-1">
+                <div id="recaptcha-checkbox" class="w-[24px] h-[24px] border-[2px] border-[#c1c1c1] bg-white rounded-[2px] hover:border-[#b2b2b2] cursor-pointer flex items-center justify-center transition-all relative">
+                    
+                    <div id="recaptcha-spinner" class="hidden w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin-fast"></div>
+                    
+                    <i id="recaptcha-check" class="fas fa-check text-green-500 text-lg hidden scale-0 transition-transform duration-200"></i>
+                </div>
+                
+                <span class="text-[#282828] font-[Roboto,sans-serif] text-[14px] font-normal cursor-default mt-0.5">I'm not a robot</span>
+            </div>
+
+            <div class="flex flex-col items-center justify-center gap-0 pr-1 pt-1 opacity-90">
+                <div class="relative w-8 h-8 mb-1">
+                   <i class="fas fa-shield-halved text-blue-600 text-2xl absolute top-0 left-1/2 transform -translate-x-1/2"></i>
+                   <i class="fas fa-rotate text-gray-200 text-lg absolute bottom-0 right-0 opacity-0"></i> 
+                </div>
+                <span class="text-[10px] text-[#555555] font-medium">reCAPTCHA</span>
+                <div class="text-[8px] text-[#555555] space-x-1 leading-tight">
+                    <span class="cursor-pointer hover:underline">Privacy</span><span>-</span><span class="cursor-pointer hover:underline">Terms</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="fallback-selector" class="hidden mt-8 bg-white/10 backdrop-blur-md p-6 rounded-xl border border-white/20 text-center max-w-sm animate-pulse">
+            <p class="text-sm mb-4 text-red-300 font-semibold"><i class="fas fa-exclamation-triangle mr-2"></i>Auto-load failed</p>
+            <p class="text-xs text-gray-300 mb-4">Browser security blocked local folder access. Please select your files manually.</p>
+            <label class="cursor-pointer bg-white text-black px-6 py-3 rounded-full font-bold hover:bg-gray-200 transition block">
+                Select MP3 Files
+                <input type="file" id="manual-file-input" accept=".mp3,audio/mpeg" multiple class="hidden" />
+            </label>
+        </div>
+
+    </div>
+
+    <div id="app-container" class="relative z-10 w-full h-full flex flex-col md:flex-row overflow-hidden">
+        
+        <div class="w-full md:w-5/12 lg:w-4/12 h-[55%] md:h-full p-2 md:p-4 flex flex-col relative">
+            <div class="flex justify-between items-center mb-2 md:absolute md:top-4 md:left-4 md:right-4 md:z-20 px-2 md:px-0">
+                <button id="btn-playlist-toggle" class="p-2 text-white/70 hover:text-white transition"><i class="fas fa-bars text-xl"></i></button>
+                <span class="text-xs font-bold tracking-widest uppercase text-white/50">Now Playing</span>
+                <button class="p-2 text-white/70 hover:text-white transition"><i class="fas fa-ellipsis-v"></i></button>
+            </div>
+
+            <div class="flex-1 flex items-center justify-center relative w-full h-full">
+                <div class="relative aspect-square w-auto h-[96%] md:h-auto md:w-[96%] max-h-[90vh] shadow-2xl rounded-2xl overflow-hidden group">
+                    <img id="album-art" src="https://via.placeholder.com/500?text=Loading..." alt="Album Art" class="w-full h-full object-cover">
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-50"></div>
+                </div>
+            </div>
+
+            <div class="md:hidden mt-2 text-center">
+                <h2 id="track-title-mobile" class="text-2xl font-bold truncate px-4">Loading...</h2>
+                <p id="track-artist-mobile" class="text-white/60 text-sm mt-1 truncate px-4">Please wait</p>
+            </div>
+        </div>
+
+        <div class="w-full md:w-7/12 lg:w-8/12 h-[45%] md:h-full flex flex-col justify-end pb-8 md:pb-0 md:justify-center relative">
+            
+            <div class="hidden md:flex flex-col items-start px-12 mb-8 w-full">
+                <span id="track-album-desktop" class="inline-block py-1 px-3 rounded-full bg-white/10 text-xs font-medium mb-4 backdrop-blur-md">Album</span>
+                <h1 id="track-title-desktop" class="text-5xl font-bold leading-tight mb-2 line-clamp-2">Waiting for files...</h1>
+                <p id="track-artist-desktop" class="text-2xl text-white/60">Please ensure files are in 'music' folder</p>
+            </div>
+
+            <div class="relative w-full flex flex-col items-center justify-center mb-4">
+                
+                <div class="relative w-full h-[280px] flex items-center justify-center">
+                    
+                    <div id="waveform-container" class="absolute inset-0 w-full h-full opacity-80 z-10" style="position: absolute;">
+                        <canvas id="waveform-canvas" class="w-full h-full"></canvas>
+                        <!-- Progress Line REMOVED --></div>
+
+                    <div class="relative z-30 flex items-center justify-center gap-4 pointer-events-none">
+                         <!-- UPDATED PREV BUTTON STYLE AND SIZE --><button id="btn-prev" class="pointer-events-auto rounded-full bg-black text-white flex items-center justify-center w-20 h-20 md:w-24 md:h-24">
+                            <i class="fas fa-backward-step text-4xl md:text-5xl"></i>
+                         </button>
+                        
+                        <!-- Play Button (Remains the largest) --><button id="btn-play" class="pointer-events-auto w-28 h-28 md:w-32 md:h-32 rounded-full bg-black text-white flex items-center justify-center">
+                            <i class="fas fa-play text-6xl md:text-7xl ml-1"></i>
+                        </button>
+                        
+                        <!-- UPDATED NEXT BUTTON STYLE AND SIZE --><button id="btn-next" class="pointer-events-auto rounded-full bg-black text-white flex items-center justify-center w-20 h-20 md:w-24 md:h-24">
+                            <i class="fas fa-forward-step text-4xl md:text-5xl"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="w-full px-8 md:px-12 flex justify-between text-xs font-mono text-white/50 mt-2 z-20">
+                    <span id="current-time">0:00</span>
+                    <span id="total-duration">0:00</span>
+                </div>
+
+                <div class="flex items-center gap-6 mt-6 text-white/40 z-20">
+                    <button id="btn-shuffle" class="hover:text-white transition"><i class="fas fa-shuffle"></i></button>
+                    <button id="btn-repeat" class="hover:text-white transition"><i class="fas fa-repeat"></i></button>
+                </div>
+            </div>
+        </div>
+
+        <div id="playlist-panel" class="absolute inset-y-0 left-0 w-full md:w-80 bg-black/90 backdrop-blur-xl transform -translate-x-full transition-transform duration-300 z-40 border-r border-white/10">
+            <div class="p-6 h-full flex flex-col">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-xl font-bold">Playlist</h3>
+                    <button id="btn-playlist-close" class="text-white/50 hover:text-white"><i class="fas fa-times"></i></button>
+                </div>
+                <div id="playlist-items" class="flex-1 overflow-y-auto playlist-scroll space-y-2">
+                    </div>
+            </div>
+        </div>
+
+    </div>
+
+    <audio id="audio-player"></audio>
+
+    <script>
+        // ==========================================
+        // USER CONFIGURATION
+        // ==========================================
+        const config = {
+            folder: 'music',
+            files: [
+                'your girlfriend sucks..mp3', 
+                'blue..mp3',
+                'song3.mp3',
+                // Add your files here
+            ]
+        };
+
+        // --- Application State ---
+        const state = {
+            playlist: [], 
+            currentIndex: 0,
+            isPlaying: false,
+            isShuffle: false,
+            isRepeat: false,
+            waveform: [], 
+            themeColor: [20, 20, 30],
+            userVerified: false // Tracks if user clicked reCAPTCHA
+        };
+
+        // --- Elements ---
+        const ui = {
+            audio: document.getElementById('audio-player'),
+            playBtn: document.getElementById('btn-play'),
+            prevBtn: document.getElementById('btn-prev'),
+            nextBtn: document.getElementById('btn-next'),
+            shuffleBtn: document.getElementById('btn-shuffle'),
+            repeatBtn: document.getElementById('btn-repeat'),
+            playlistToggle: document.getElementById('btn-playlist-toggle'),
+            playlistClose: document.getElementById('btn-playlist-close'),
+            playlistPanel: document.getElementById('playlist-panel'),
+            playlistItems: document.getElementById('playlist-items'),
+            art: document.getElementById('album-art'),
+            titleMobile: document.getElementById('track-title-mobile'),
+            artistMobile: document.getElementById('track-artist-mobile'),
+            titleDesktop: document.getElementById('track-title-desktop'),
+            artistDesktop: document.getElementById('track-artist-desktop'),
+            albumDesktop: document.getElementById('track-album-desktop'),
+            currentTime: document.getElementById('current-time'),
+            totalDuration: document.getElementById('total-duration'),
+            canvas: document.getElementById('waveform-canvas'),
+            bgLayer: document.getElementById('bg-layer'),
+            
+            // Modal & Verification
+            startModal: document.getElementById('start-modal'),
+            checkbox: document.getElementById('recaptcha-checkbox'),
+            spinner: document.getElementById('recaptcha-spinner'),
+            checkmark: document.getElementById('recaptcha-check'),
+            fallbackSelector: document.getElementById('fallback-selector'),
+            manualFileInput: document.getElementById('manual-file-input')
+        };
+
+        const colorThief = new ColorThief();
+
+        // --- Initialization ---
+        window.addEventListener('DOMContentLoaded', initPlayer);
+
+        // --- Manual File Selection (Fallback) ---
+        ui.manualFileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files).filter(f => f.type.startsWith('audio/') || f.name.endsWith('.mp3'));
+            if(files.length > 0) {
+                state.playlist = files;
+                setupPlayerAfterLoad();
+                ui.fallbackSelector.style.display = 'none';
+                // If user already verified, just close modal and play
+                if(state.userVerified) {
+                   closeModalAndPlay();
+                }
+            }
+        });
+
+        // --- reCAPTCHA Interaction ---
+        ui.checkbox.addEventListener('click', () => {
+            if (ui.checkbox.classList.contains('processing') || state.userVerified) return;
+            ui.checkbox.classList.add('processing');
+
+            // 1. Show Spinner
+            ui.spinner.classList.remove('hidden');
+            
+            // 2. Simulate Network Verification (Wait 1s)
+            setTimeout(() => {
+                ui.spinner.classList.add('hidden');
+                ui.checkmark.classList.remove('hidden');
+                
+                setTimeout(() => {
+                    ui.checkmark.classList.remove('scale-0');
+                }, 50);
+
+                state.userVerified = true;
+
+                // 3. Attempt to Start
+                // We wait a moment for visual satisfaction
+                setTimeout(() => {
+                    if (state.playlist.length > 0) {
+                        closeModalAndPlay();
+                    } else {
+                        // Playlist not ready yet (still fetching or failed)
+                        // The initPlayer function will handle the play trigger when it finishes
+                        // because state.userVerified is now true.
+                    }
+                }, 600); 
+            }, 800);
+        });
+
+        function closeModalAndPlay() {
+            ui.startModal.classList.add('opacity-0', 'pointer-events-none');
+            state.isPlaying = true;
+            // UPDATED ICON SIZE (Mobile: text-6xl)
+            ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
+            
+            // If we haven't loaded the track src yet, loadTrack(0) handles it.
+            // If src is already set, just play.
+            if(!ui.audio.src || ui.audio.src === window.location.href) {
+                loadTrack(0);
+            } else {
+                ui.audio.play().catch(e => console.log("Play prevented:", e));
+            }
+        }
+
+        async function initPlayer() {
+            const loadedFiles = [];
+            let fetchFailed = false;
+
+            for (const fileName of config.files) {
+                try {
+                    const path = `${config.folder}/${fileName}`;
+                    const response = await fetch(path);
+                    
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        blob.name = fileName; 
+                        loadedFiles.push(blob);
+                    } else {
+                        console.warn(`Could not load ${fileName}`);
+                    }
+                } catch (error) {
+                    console.error(`Error fetching ${fileName}:`, error);
+                    fetchFailed = true;
+                }
+            }
+
+            if (loadedFiles.length > 0) {
+                state.playlist = loadedFiles;
+                setupPlayerAfterLoad();
+                
+                // If user already clicked the box while we were loading:
+                if(state.userVerified) {
+                    closeModalAndPlay();
+                }
+            } else {
+                // Show fallback if no files loaded automatically
+                ui.fallbackSelector.classList.remove('hidden');
+                ui.titleDesktop.innerText = "Select Files";
+                ui.artistDesktop.innerText = "Automatic loading blocked by browser.";
+            }
+        }
+
+        function setupPlayerAfterLoad() {
+            renderPlaylist();
+            // Pre-load metadata for first track (don't play yet)
+            loadTrack(0, false); 
+        }
+
+        // --- Core Player Logic ---
+
+        function renderPlaylist() {
+            ui.playlistItems.innerHTML = '';
+            state.playlist.forEach((file, index) => {
+                const div = document.createElement('div');
+                div.className = `p-3 rounded-lg cursor-pointer hover:bg-white/10 transition flex items-center gap-3 group ${index === state.currentIndex ? 'bg-white/20' : ''}`;
+                div.innerHTML = `
+                    <div class="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center text-xs text-white/50 group-hover:text-white">
+                        ${index + 1}
+                    </div>
+                    <div class="overflow-hidden">
+                        <div class="truncate font-medium text-sm">${file.name.replace(/\.mp3$/i, '')}</div>
+                    </div>
+                `;
+                div.onclick = () => {
+                    state.currentIndex = index;
+                    state.isPlaying = true;
+                    // UPDATED ICON SIZE (Mobile: text-6xl)
+                    ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
+                    loadTrack(index);
+                    if(window.innerWidth < 768) ui.playlistPanel.classList.add('-translate-x-full');
+                };
+                ui.playlistItems.appendChild(div);
+            });
+        }
+
+        function loadTrack(index, autoPlay = true) {
+            if (!state.playlist[index]) return;
+            
+            const file = state.playlist[index];
+            const url = URL.createObjectURL(file);
+            
+            // Only reset src if it's different (prevents reload loop on pause/play)
+            if(ui.audio.src !== url) {
+                ui.audio.src = url;
+                ui.audio.load();
+            }
+            
+            // Reset UI Time
+            if(autoPlay) {
+                 ui.currentTime.innerText = "0:00";
+                 ui.totalDuration.innerText = "Loading...";
+            }
+
+            // Update Active Playlist Item
+            Array.from(ui.playlistItems.children).forEach((child, i) => {
+                if (i === index) child.classList.add('bg-white/20');
+                else child.classList.remove('bg-white/20');
+            });
+
+            // Metadata
+            const defaultTitle = file.name.replace(/\.mp3$/i, '');
+            updateMetadataUI({
+                title: defaultTitle,
+                artist: "Unknown Artist",
+                album: "Unknown Album",
+                picture: null
+            });
+
+            // Read ID3 Tags
+            new jsmediatags.Reader(file)
+                .setTagsToRead(["title", "artist", "album", "picture"])
+                .read({
+                    onSuccess: (tag) => {
+                        const tags = tag.tags;
+                        let pictureUrl = null;
+                        if (tags.picture) {
+                            const { data, format } = tags.picture;
+                            let base64String = "";
+                            for (let i = 0; i < data.length; i++) {
+                                base64String += String.fromCharCode(data[i]);
+                            }
+                            pictureUrl = `data:${format};base64,${window.btoa(base64String)}`;
+                        }
+                        updateMetadataUI({
+                            title: tags.title || defaultTitle,
+                            artist: tags.artist || "Unknown Artist",
+                            album: tags.album || "Unknown Album",
+                            picture: pictureUrl
+                        });
+                    },
+                    onError: (error) => {
+                        if(ui.art.src.includes("placeholder")) updateThemeFromImage(null);
+                    }
+                });
+
+            generateWaveform();
+            
+            if (autoPlay && state.isPlaying) {
+                ui.audio.play().catch(e => {
+                    console.warn("Autoplay blocked:", e);
+                    state.isPlaying = false;
+                    // UPDATED ICON SIZE (Mobile: text-6xl)
+                    ui.playBtn.innerHTML = '<i class="fas fa-play text-6xl md:text-7xl ml-1"></i>';
+                });
+            }
+        }
+
+        function updateMetadataUI(data) {
+            ui.titleMobile.innerText = data.title;
+            ui.artistMobile.innerText = data.artist;
+            ui.titleDesktop.innerText = data.title;
+            ui.artistDesktop.innerText = data.artist;
+            ui.albumDesktop.innerText = data.album;
+            
+            if (data.picture) {
+                ui.art.src = data.picture;
+                ui.art.onload = () => updateThemeFromImage(ui.art);
+            } else {
+                ui.art.src = "https://via.placeholder.com/500?text=No+Cover";
+                updateThemeFromImage(null);
+            }
+        }
+
+        function updateThemeFromImage(imgElement) {
+            try {
+                let color = [30, 30, 40]; 
+                if (imgElement) {
+                    color = colorThief.getColor(imgElement);
+                }
+                state.themeColor = color;
+                const rgb = `${color[0]}, ${color[1]}, ${color[2]}`;
+                
+                ui.bgLayer.style.background = `linear-gradient(135deg, rgba(${rgb}, 0.9) 0%, rgba(10,10,10,1) 100%)`;
+                // ui.playBtn.style.boxShadow = `0 0 30px rgba(${rgb}, 0.6)`; // Removed this line
+            } catch (e) {}
+        }
+
+        // --- Controls ---
+        ui.playBtn.addEventListener('click', () => {
+            if (ui.audio.paused) {
+                ui.audio.play();
+                state.isPlaying = true;
+                // UPDATED ICON SIZE (Mobile: text-6xl)
+                ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
+            } else {
+                ui.audio.pause();
+                state.isPlaying = false;
+                // UPDATED ICON SIZE (Mobile: text-6xl)
+                ui.playBtn.innerHTML = '<i class="fas fa-play text-6xl md:text-7xl ml-1"></i>';
+            }
+        });
+
+        ui.prevBtn.addEventListener('click', () => {
+            state.currentIndex = (state.currentIndex - 1 + state.playlist.length) % state.playlist.length;
+            state.isPlaying = true;
+            // UPDATED ICON SIZE (Mobile: text-6xl)
+            ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
+            loadTrack(state.currentIndex);
+        });
+
+        ui.nextBtn.addEventListener('click', () => {
+            if (state.isShuffle) {
+                state.currentIndex = Math.floor(Math.random() * state.playlist.length);
+            } else {
+                state.currentIndex = (state.currentIndex + 1) % state.playlist.length;
+            }
+            state.isPlaying = true;
+            // UPDATED ICON SIZE (Mobile: text-6xl)
+            ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
+            loadTrack(state.currentIndex);
+        });
+
+        ui.shuffleBtn.addEventListener('click', () => {
+            state.isShuffle = !state.isShuffle;
+            ui.shuffleBtn.classList.toggle('text-purple-400', state.isShuffle);
+            ui.shuffleBtn.classList.toggle('text-white/40', !state.isShuffle);
+        });
+        
+        ui.repeatBtn.addEventListener('click', () => {
+            state.isRepeat = !state.isRepeat;
+            ui.repeatBtn.classList.toggle('text-purple-400', state.isRepeat);
+            ui.repeatBtn.classList.toggle('text-white/40', !state.isRepeat);
+        });
+
+        ui.playlistToggle.addEventListener('click', () => ui.playlistPanel.classList.remove('-translate-x-full'));
+        ui.playlistClose.addEventListener('click', () => ui.playlistPanel.classList.add('-translate-x-full'));
+
+        ui.audio.addEventListener('timeupdate', () => {
+             const current = ui.audio.currentTime;
+             const duration = ui.audio.duration;
+             if (!isNaN(duration)) {
+                const mins = Math.floor(current / 60);
+                const secs = Math.floor(current % 60);
+                ui.currentTime.innerText = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+                
+                const dmins = Math.floor(duration / 60);
+                const dsecs = Math.floor(duration % 60);
+                ui.totalDuration.innerText = `${dmins}:${dsecs < 10 ? '0' : ''}${dsecs}`;
+                
+                drawWaveform();
+             }
+        });
+
+        ui.audio.addEventListener('ended', () => {
+            if (state.isRepeat) {
+                ui.audio.currentTime = 0;
+                ui.audio.play();
+            } else {
+                ui.nextBtn.click();
+            }
+        });
+
+        // --- Waveform ---
+        function generateWaveform() {
+            const bars = 200; 
+            state.waveform = [];
+            let lastVal = 0.5;
+            for(let i=0; i<bars; i++) {
+                let change = (Math.random() - 0.5) * 0.4;
+                let val = lastVal + change;
+                val = Math.max(0.1, Math.min(1.0, val));
+                state.waveform.push(val);
+                lastVal = val;
+            }
+            state.waveform = [0.1, 0.1, 0.1, ...state.waveform, 0.1, 0.1, 0.1];
+            resizeCanvas();
+            drawWaveform();
+        }
+
+        function resizeCanvas() {
+            if(ui.canvas.parentElement) {
+                ui.canvas.width = ui.canvas.parentElement.offsetWidth;
+                ui.canvas.height = ui.canvas.parentElement.offsetHeight;
+            }
+        }
+        window.addEventListener('resize', () => { resizeCanvas(); drawWaveform(); });
+
+        ui.canvas.addEventListener('click', (e) => {
+            const center = ui.canvas.width / 2;
+            if (e.offsetX > center) ui.audio.currentTime += 5;
+            else ui.audio.currentTime -= 5;
+        });
+
+        function drawWaveform() {
+            const ctx = ui.canvas.getContext('2d');
+            const width = ui.canvas.width;
+            const height = ui.canvas.height;
+            const center = width / 2;
+            
+            ctx.clearRect(0, 0, width, height);
+            if (!ui.audio.duration) return;
+
+            const barWidth = 8; // Reduced from 12
+            const gap = 6; // Reduced from 8
+            const totalBarWidth = barWidth + gap;
+            const waveData = state.waveform;
+            
+            const progress = ui.audio.currentTime / ui.audio.duration;
+            const dataIndex = progress * (waveData.length - 1);
+            
+            for (let i = 0; i < waveData.length; i++) {
+                const offset = (i - dataIndex) * totalBarWidth;
+                const x = center + offset;
+                
+                if (x < -totalBarWidth || x > width + totalBarWidth) continue;
+                
+                const barHeight = waveData[i] * (height * 0.8);
+                const y = (height - barHeight) / 2;
+                
+                ctx.beginPath();
+                ctx.roundRect(x, y, barWidth, barHeight, 6);
+                
+                if (x < center - (barWidth/2)) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+                } else if (x > center + (barWidth/2)) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'; 
+                } else {
+                    ctx.fillStyle = '#ffffff';
+                }
+                ctx.fill();
+            }
+        }
+        
+        function animate() {
+            if(!ui.audio.paused) drawWaveform();
+            requestAnimationFrame(animate);
+        }
+        animate();
+        resizeCanvas();
+    </script>
+</body>
+</html>
