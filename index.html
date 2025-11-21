@@ -175,11 +175,7 @@
                     <span id="current-time">0:00</span>
                     <span id="total-duration">0:00</span>
                 </div>
-
-                <div class="flex items-center gap-6 mt-6 text-white/40 z-20">
-                    <button id="btn-shuffle" class="hover:text-white transition"><i class="fas fa-shuffle"></i></button>
-                    <button id="btn-repeat" class="hover:text-white transition"><i class="fas fa-repeat"></i></button>
-                </div>
+                <!-- Removed Shuffle and Repeat buttons container -->
             </div>
         </div>
 
@@ -230,8 +226,6 @@
             playBtn: document.getElementById('btn-play'),
             prevBtn: document.getElementById('btn-prev'),
             nextBtn: document.getElementById('btn-next'),
-            shuffleBtn: document.getElementById('btn-shuffle'),
-            repeatBtn: document.getElementById('btn-repeat'),
             playlistToggle: document.getElementById('btn-playlist-toggle'),
             playlistClose: document.getElementById('btn-playlist-close'),
             playlistPanel: document.getElementById('playlist-panel'),
@@ -529,18 +523,6 @@
             // UPDATED ICON SIZE (Mobile: text-6xl)
             ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
             loadTrack(state.currentIndex);
-        });
-
-        ui.shuffleBtn.addEventListener('click', () => {
-            state.isShuffle = !state.isShuffle;
-            ui.shuffleBtn.classList.toggle('text-purple-400', state.isShuffle);
-            ui.shuffleBtn.classList.toggle('text-white/40', !state.isShuffle);
-        });
-        
-        ui.repeatBtn.addEventListener('click', () => {
-            state.isRepeat = !state.isRepeat;
-            ui.repeatBtn.classList.toggle('text-purple-400', state.isRepeat);
-            ui.repeatBtn.classList.toggle('text-white/40', !state.isRepeat);
         });
 
         ui.playlistToggle.addEventListener('click', () => ui.playlistPanel.classList.remove('-translate-x-full'));
