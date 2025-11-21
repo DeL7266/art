@@ -83,7 +83,14 @@
 
     <div id="start-modal" class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity duration-500">
         
-        <div id="recaptcha-widget" class="bg-[#f9f9f9] border border-[#d3d3d3] rounded shadow-[0_2px_4px_rgba(0,0,0,0.1)] p-3 w-[304px] h-[78px] flex items-center justify-between select-none scale-110 md:scale-125 transition-all">
+        <!-- Added Loading Indicator -->
+        <div id="loading-spinner" class="flex flex-col items-center transition-opacity duration-300">
+            <div class="w-8 h-8 border-4 border-white/10 border-t-white/80 rounded-full animate-spin mb-4"></div>
+            <span class="text-white/50 text-xs font-bold tracking-widest uppercase animate-pulse">Loading Assets...</span>
+        </div>
+
+        <!-- Added hidden class initially -->
+        <div id="recaptcha-widget" class="hidden bg-[#f9f9f9] border border-[#d3d3d3] rounded shadow-[0_2px_4px_rgba(0,0,0,0.1)] p-3 w-[304px] h-[78px] flex items-center justify-between select-none scale-110 md:scale-125 transition-all">
             
             <div class="flex items-center gap-3 pl-1">
                 <div id="recaptcha-checkbox" class="w-[24px] h-[24px] border-[2px] border-[#c1c1c1] bg-white rounded-[2px] hover:border-[#b2b2b2] cursor-pointer flex items-center justify-center transition-all relative">
@@ -206,7 +213,6 @@
             files: [
                 'your girlfriend sucks..mp3', 
                 'blue..mp3',
-                'song3.mp3',
                 // Add your files here
             ]
         };
@@ -246,6 +252,8 @@
             
             // Modal & Verification
             startModal: document.getElementById('start-modal'),
+            loadingSpinner: document.getElementById('loading-spinner'), // Added reference
+            recaptchaWidget: document.getElementById('recaptcha-widget'), // Added reference
             checkbox: document.getElementById('recaptcha-checkbox'),
             spinner: document.getElementById('recaptcha-spinner'),
             checkmark: document.getElementById('recaptcha-check'),
@@ -280,9 +288,8 @@
             // 1. Show Spinner
             ui.spinner.classList.remove('hidden');
             
-            // 2. Play Animation (Fixed duration)
+            // 2. Simulate Network Verification (Wait 1s)
             setTimeout(() => {
-                // Animation step 1: Hide spinner, show checkmark
                 ui.spinner.classList.add('hidden');
                 ui.checkmark.classList.remove('hidden');
                 
@@ -290,24 +297,23 @@
                     ui.checkmark.classList.remove('scale-0');
                 }, 50);
 
-                // Mark as verified
                 state.userVerified = true;
 
-                // 3. Proceed only if files are loaded
+                // 3. Attempt to Start
+                // We wait a moment for visual satisfaction
                 setTimeout(() => {
-                    // Only proceed if files are ready. 
-                    // If not, the initPlayer function will handle it when files arrive.
                     if (state.playlist.length > 0) {
                         closeModalAndPlay();
+                    } else {
+                        // Playlist not ready yet (still fetching or failed)
+                        // The initPlayer function will handle the play trigger when it finishes
+                        // because state.userVerified is now true.
                     }
                 }, 600); 
             }, 800);
         });
 
         function closeModalAndPlay() {
-            // Guard to prevent double-execution
-            if (ui.startModal.classList.contains('opacity-0')) return;
-
             ui.startModal.classList.add('opacity-0', 'pointer-events-none');
             state.isPlaying = true;
             // UPDATED ICON SIZE (Mobile: text-6xl)
@@ -344,10 +350,16 @@
                 }
             }
 
+            // Hide loading spinner regardless of success/fail
+            ui.loadingSpinner.classList.add('hidden');
+
             if (loadedFiles.length > 0) {
                 state.playlist = loadedFiles;
                 setupPlayerAfterLoad();
                 
+                // Show the captcha widget now that files are ready
+                ui.recaptchaWidget.classList.remove('hidden');
+
                 // If user already clicked the box while we were loading:
                 if(state.userVerified) {
                     closeModalAndPlay();
