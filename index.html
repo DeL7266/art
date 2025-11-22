@@ -156,17 +156,17 @@
                     <!-- Controls Layer: Absolute inset-0 ensures it sits exactly on top. z-50 ensures top layer. -->
                     <div class="absolute inset-0 z-50 flex items-center justify-center gap-2 pointer-events-none">
                         <!-- Prev Button -->
-                         <button id="btn-prev" class="pointer-events-auto rounded-full bg-black text-white flex items-center justify-center w-16 h-16 md:w-24 md:h-24 shadow-2xl border border-white/10">
+                         <button id="btn-prev" class="pointer-events-auto rounded-full bg-black text-white flex items-center justify-center w-16 h-16 md:w-24 md:h-24 shadow-2xl border border-white/10 transition-transform duration-300 ease-in-out">
                             <i class="fas fa-backward-step text-3xl md:text-5xl drop-shadow-md"></i>
                          </button>
                         
                         <!-- Play Button (Added transitions) -->
-                        <button id="btn-play" class="pointer-events-auto w-24 h-24 md:w-32 md:h-32 rounded-full bg-black text-white flex items-center justify-center shadow-2xl border border-white/10 transition-transform duration-300 ease-out">
+                        <button id="btn-play" class="pointer-events-auto w-24 h-24 md:w-32 md:h-32 rounded-full bg-black text-white flex items-center justify-center shadow-2xl border border-white/10 transition-transform duration-300 ease-in-out">
                             <i class="fas fa-play text-5xl md:text-7xl ml-2 drop-shadow-md"></i>
                         </button>
                         
                         <!-- Next Button -->
-                        <button id="btn-next" class="pointer-events-auto rounded-full bg-black text-white flex items-center justify-center w-16 h-16 md:w-24 md:h-24 shadow-2xl border border-white/10">
+                        <button id="btn-next" class="pointer-events-auto rounded-full bg-black text-white flex items-center justify-center w-16 h-16 md:w-24 md:h-24 shadow-2xl border border-white/10 transition-transform duration-300 ease-in-out">
                             <i class="fas fa-forward-step text-3xl md:text-5xl drop-shadow-md"></i>
                         </button>
                     </div>
@@ -211,10 +211,60 @@
             isRepeat: false,
             waveform: [], 
             themeColor: [20, 20, 30],
-            userVerified: false // Tracks if user clicked reCAPTCHA
+            userVerified: false, // Tracks if user clicked reCAPTCHA
+            isFadingOut: false,
+            visualTime: 0,
+            isDragging: false
         };
         // Global Audio Context
         let audioCtx = null;
+        let fadeInterval = null;
+
+        function playWithFade() {
+            if (fadeInterval) clearInterval(fadeInterval);
+            ui.audio.playbackRate = 1.0; // Reset playback rate
+            if (ui.audio.paused) ui.audio.volume = 0;
+            const playPromise = ui.audio.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    fadeInterval = setInterval(() => {
+                        if (ui.audio.volume < 0.95) {
+                            ui.audio.volume = Math.min(1, ui.audio.volume + 0.05);
+                        } else {
+                            ui.audio.volume = 1;
+                            clearInterval(fadeInterval);
+                        }
+                    }, 25);
+                }).catch(e => {
+                    console.warn("Autoplay blocked:", e);
+                    state.isPlaying = false;
+                    updatePlayButtonUI();
+                });
+            }
+        }
+
+        function pauseWithFade() {
+            if (fadeInterval) clearInterval(fadeInterval);
+            state.isFadingOut = true;
+            
+            fadeInterval = setInterval(() => {
+                if (ui.audio.volume > 0.05) {
+                    ui.audio.volume = Math.max(0, ui.audio.volume - 0.05);
+                } else {
+                    ui.audio.volume = 0;
+                    clearInterval(fadeInterval);
+                    ui.audio.pause();
+                    
+                    // Sync audio to where the visual tape-stop ended
+                    if (state.visualTime > 0) {
+                        ui.audio.currentTime = state.visualTime;
+                    }
+                    
+                    ui.audio.volume = 1;
+                    state.isFadingOut = false;
+                }
+            }, 25);
+        }
         // --- Elements ---
         const ui = {
             audio: document.getElementById('audio-player'),
@@ -298,9 +348,15 @@
             if (state.isPlaying) {
                 ui.playBtn.innerHTML = '<i class="fas fa-pause text-5xl md:text-7xl drop-shadow-md"></i>';
                 ui.playBtn.classList.add('scale-90');
+                // Move neighbors closer
+                ui.prevBtn.classList.add('translate-x-2', 'md:translate-x-2');
+                ui.nextBtn.classList.add('-translate-x-2', 'md:-translate-x-2');
             } else {
                 ui.playBtn.innerHTML = '<i class="fas fa-play text-5xl md:text-7xl ml-2 drop-shadow-md"></i>';
                 ui.playBtn.classList.remove('scale-90');
+                // Reset neighbors
+                ui.prevBtn.classList.remove('translate-x-2', 'md:translate-x-2');
+                ui.nextBtn.classList.remove('-translate-x-2', 'md:-translate-x-2');
             }
         }
 
@@ -314,7 +370,7 @@
             if(!ui.audio.src || ui.audio.src === window.location.href) {
                 loadTrack(0);
             } else {
-                ui.audio.play().catch(e => console.log("Play prevented:", e));
+                playWithFade();
             }
             
             // Initialize Audio Context on user interaction
@@ -465,11 +521,7 @@
             processAudioForWaveform(file);
             
             if (autoPlay && state.isPlaying) {
-                ui.audio.play().catch(e => {
-                    console.warn("Autoplay blocked:", e);
-                    state.isPlaying = false;
-                    updatePlayButtonUI();
-                });
+                playWithFade();
             }
         }
         async function processAudioForWaveform(fileBlob) {
@@ -549,11 +601,11 @@
         }
         // --- Controls ---
         ui.playBtn.addEventListener('click', () => {
-            if (ui.audio.paused) {
-                ui.audio.play();
+            if (!state.isPlaying) {
+                playWithFade();
                 state.isPlaying = true;
             } else {
-                ui.audio.pause();
+                pauseWithFade();
                 state.isPlaying = false;
             }
             updatePlayButtonUI();
@@ -587,8 +639,7 @@
                 const dmins = Math.floor(duration / 60);
                 const dsecs = Math.floor(duration % 60);
                 ui.totalDuration.innerText = `${dmins}:${dsecs < 10 ? '0' : ''}${dsecs}`;
-                
-                drawWaveform();
+                // drawWaveform() removed to avoid conflict with custom animation loop
              }
         });
         ui.audio.addEventListener('ended', () => {
@@ -633,15 +684,62 @@
             }
         }
         window.addEventListener('resize', () => { resizeCanvas(); drawWaveform(); });
-        ui.canvas.addEventListener('click', (e) => {
-            // We need to use the logical width for click calculation
-            const dpr = window.devicePixelRatio || 1;
-            const width = ui.canvas.width / dpr;
-            const center = width / 2;
-            if (e.offsetX > center) ui.audio.currentTime += 5;
-            else ui.audio.currentTime -= 5;
-        });
-        function drawWaveform() {
+        
+        // --- Dragging / Seeking Logic ---
+        let dragLastX = 0;
+        
+        const getX = (e) => e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+        
+        const startDrag = (e) => {
+            state.isDragging = true;
+            dragLastX = getX(e);
+        };
+        
+        const moveDrag = (e) => {
+            if (!state.isDragging) return;
+            e.preventDefault(); // Prevent scrolling on mobile
+            const currentX = getX(e);
+            const dx = currentX - dragLastX;
+            dragLastX = currentX;
+            
+            const barWidth = 8; 
+            const gap = 6; 
+            const totalBarWidth = barWidth + gap;
+            const waveData = state.waveform;
+            const duration = ui.audio.duration || 1;
+            
+            // Calculate time shift based on pixel movement
+            // dx > 0 (mouse right) -> waveform moves right -> we see earlier time -> time decreases
+            const dt = -(dx / totalBarWidth) / (waveData.length - 1) * duration;
+            
+            state.visualTime = Math.max(0, Math.min(duration, state.visualTime + dt));
+            
+            // Update time display immediately while dragging
+             const mins = Math.floor(state.visualTime / 60);
+             const secs = Math.floor(state.visualTime % 60);
+             ui.currentTime.innerText = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        };
+        
+        const endDrag = () => {
+            if (state.isDragging) {
+                state.isDragging = false;
+                ui.audio.currentTime = state.visualTime;
+            }
+        };
+
+        ui.canvas.addEventListener('mousedown', startDrag);
+        ui.canvas.addEventListener('touchstart', startDrag, {passive: false});
+        
+        window.addEventListener('mousemove', moveDrag);
+        window.addEventListener('touchmove', moveDrag, {passive: false});
+        
+        window.addEventListener('mouseup', endDrag);
+        window.addEventListener('touchend', endDrag);
+        
+        // Handle mouse leaving window/canvas
+        window.addEventListener('mouseleave', () => { if(state.isDragging) endDrag(); });
+
+        function drawWaveform(timeOverride) {
             const ctx = ui.canvas.getContext('2d');
             const dpr = window.devicePixelRatio || 1;
             
@@ -652,12 +750,13 @@
             
             ctx.clearRect(0, 0, width, height);
             if (!ui.audio.duration) return;
-            const barWidth = 8; // Reduced from 12
-            const gap = 6; // Reduced from 8
+            const barWidth = 8; 
+            const gap = 6; 
             const totalBarWidth = barWidth + gap;
             const waveData = state.waveform;
             
-            const progress = ui.audio.currentTime / ui.audio.duration;
+            const t = timeOverride !== undefined ? timeOverride : ui.audio.currentTime;
+            const progress = t / ui.audio.duration;
             const dataIndex = progress * (waveData.length - 1);
             
             // Create Gradient for smooth transition across the whole canvas
@@ -690,8 +789,28 @@
             ctx.fill();
         }
         
+        let lastTime = performance.now();
         function animate() {
-            if(!ui.audio.paused) drawWaveform();
+            const now = performance.now();
+            const dt = (now - lastTime) / 1000;
+            lastTime = now;
+
+            // Update time only if not dragging
+            if (!state.isDragging) {
+                if (state.isFadingOut) {
+                    // Simulate slowing down based on volume: speed ~ volume
+                    state.visualTime += dt * ui.audio.volume;
+                } else {
+                    // Sync with real audio time
+                    state.visualTime = ui.audio.currentTime;
+                }
+            }
+
+            // Always draw if playing, fading, or dragging
+            if(!ui.audio.paused || state.isFadingOut || state.isDragging) {
+                drawWaveform(state.visualTime);
+            }
+            
             requestAnimationFrame(animate);
         }
         animate();
