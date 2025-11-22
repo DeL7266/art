@@ -213,6 +213,7 @@
             files: [
                 'your girlfriend sucks..mp3', 
                 'blue..mp3',
+                'song3.mp3',
                 // Add your files here
             ]
         };
@@ -329,8 +330,9 @@
         }
 
         async function initPlayer() {
-            const loadedFiles = [];
+            // Remove local loadedFiles array, push directly to state.playlist
             let fetchFailed = false;
+            let firstFileLoaded = false;
 
             for (const fileName of config.files) {
                 try {
@@ -340,7 +342,31 @@
                     if (response.ok) {
                         const blob = await response.blob();
                         blob.name = fileName; 
-                        loadedFiles.push(blob);
+                        
+                        // Push directly to state playlist
+                        state.playlist.push(blob);
+
+                        // If this is the first file, unlock the UI immediately
+                        if (!firstFileLoaded) {
+                            firstFileLoaded = true;
+                            
+                            // Hide loading spinner
+                            ui.loadingSpinner.classList.add('hidden');
+                            
+                            // Initialize player with this first track
+                            setupPlayerAfterLoad();
+                            
+                            // Show the captcha widget immediately
+                            ui.recaptchaWidget.classList.remove('hidden');
+
+                            // If user verified (unlikely this fast, but good for safety)
+                            if(state.userVerified) {
+                                closeModalAndPlay();
+                            }
+                        } else {
+                            // For subsequent files, just refresh the playlist list in the UI
+                            renderPlaylist();
+                        }
                     } else {
                         console.warn(`Could not load ${fileName}`);
                     }
@@ -350,22 +376,9 @@
                 }
             }
 
-            // Hide loading spinner regardless of success/fail
-            ui.loadingSpinner.classList.add('hidden');
-
-            if (loadedFiles.length > 0) {
-                state.playlist = loadedFiles;
-                setupPlayerAfterLoad();
-                
-                // Show the captcha widget now that files are ready
-                ui.recaptchaWidget.classList.remove('hidden');
-
-                // If user already clicked the box while we were loading:
-                if(state.userVerified) {
-                    closeModalAndPlay();
-                }
-            } else {
-                // Show fallback if no files loaded automatically
+            // If loop finishes and nothing loaded
+            if (!firstFileLoaded) {
+                ui.loadingSpinner.classList.add('hidden');
                 ui.fallbackSelector.classList.remove('hidden');
                 ui.titleDesktop.innerText = "Select Files";
                 ui.artistDesktop.innerText = "Automatic loading blocked by browser.";
