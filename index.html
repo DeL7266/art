@@ -230,6 +230,9 @@
             userVerified: false // Tracks if user clicked reCAPTCHA
         };
 
+        // Global Audio Context
+        let audioCtx = null;
+
         // --- Elements ---
         const ui = {
             audio: document.getElementById('audio-player'),
@@ -253,8 +256,8 @@
             
             // Modal & Verification
             startModal: document.getElementById('start-modal'),
-            loadingSpinner: document.getElementById('loading-spinner'), // Added reference
-            recaptchaWidget: document.getElementById('recaptcha-widget'), // Added reference
+            loadingSpinner: document.getElementById('loading-spinner'), 
+            recaptchaWidget: document.getElementById('recaptcha-widget'), 
             checkbox: document.getElementById('recaptcha-checkbox'),
             spinner: document.getElementById('recaptcha-spinner'),
             checkmark: document.getElementById('recaptcha-check'),
@@ -307,8 +310,6 @@
                         closeModalAndPlay();
                     } else {
                         // Playlist not ready yet (still fetching or failed)
-                        // The initPlayer function will handle the play trigger when it finishes
-                        // because state.userVerified is now true.
                     }
                 }, 600); 
             }, 800);
@@ -326,6 +327,14 @@
                 loadTrack(0);
             } else {
                 ui.audio.play().catch(e => console.log("Play prevented:", e));
+            }
+            
+            // Initialize Audio Context on user interaction
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
             }
         }
 
@@ -478,7 +487,8 @@
                     }
                 });
 
-            generateWaveform();
+            // GENERATE REAL WAVEFORM
+            processAudioForWaveform(file);
             
             if (autoPlay && state.isPlaying) {
                 ui.audio.play().catch(e => {
@@ -488,6 +498,56 @@
                     ui.playBtn.innerHTML = '<i class="fas fa-play text-6xl md:text-7xl ml-1"></i>';
                 });
             }
+        }
+
+        async function processAudioForWaveform(fileBlob) {
+             // Use a temporary placeholder while processing
+             // Flat line
+             state.waveform = new Array(200).fill(0.1);
+             drawWaveform();
+
+             try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                const arrayBuffer = await fileBlob.arrayBuffer();
+                // We need to decode the audio data to get the raw PCM samples
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                // Get the Left channel data (usually channel 0)
+                const rawData = audioBuffer.getChannelData(0); 
+                const samples = 200; // Number of bars we want to display
+                const blockSize = Math.floor(rawData.length / samples);
+                const waveform = [];
+                
+                // Calculate average amplitude for each block
+                for (let i = 0; i < samples; i++) {
+                    let sum = 0;
+                    for (let j = 0; j < blockSize; j++) {
+                        // Use Math.abs because audio signal goes from -1 to 1
+                        sum += Math.abs(rawData[i * blockSize + j]);
+                    }
+                    // Average amplitude for this block
+                    let avg = sum / blockSize; 
+                    waveform.push(avg);
+                }
+                
+                // Normalize the data (scale it so the loudest part is 1.0)
+                const maxVal = Math.max(...waveform) || 1; // Avoid divide by zero
+                state.waveform = waveform.map(v => {
+                    // Scale and ensure a minimum height of 0.1 for visibility
+                    return Math.max(0.1, (v / maxVal)); 
+                });
+                
+                // Add padding to start and end for the scrolling effect logic
+                state.waveform = [0.1, 0.1, 0.1, ...state.waveform, 0.1, 0.1, 0.1];
+                
+                drawWaveform();
+
+             } catch (e) {
+                 console.error("Error generating real waveform:", e);
+                 // Fallback to random if decoding fails
+                 generateRandomWaveform();
+             }
         }
 
         function updateMetadataUI(data) {
@@ -583,8 +643,8 @@
             }
         });
 
-        // --- Waveform ---
-        function generateWaveform() {
+        // --- Waveform Fallback (Random) ---
+        function generateRandomWaveform() {
             const bars = 200; 
             state.waveform = [];
             let lastVal = 0.5;
@@ -602,15 +662,22 @@
 
         function resizeCanvas() {
             if(ui.canvas.parentElement) {
-                ui.canvas.width = ui.canvas.parentElement.offsetWidth;
-                ui.canvas.height = ui.canvas.parentElement.offsetHeight;
+                // Scale canvas for high DPI displays
+                const dpr = window.devicePixelRatio || 1;
+                ui.canvas.width = ui.canvas.parentElement.offsetWidth * dpr;
+                ui.canvas.height = ui.canvas.parentElement.offsetHeight * dpr;
             }
         }
         window.addEventListener('resize', () => { resizeCanvas(); drawWaveform(); });
 
         ui.canvas.addEventListener('click', (e) => {
+            // Account for DPR when calculating click position
+            const dpr = window.devicePixelRatio || 1;
+            const rect = ui.canvas.getBoundingClientRect();
+            const clickX = (e.clientX - rect.left) * dpr;
             const center = ui.canvas.width / 2;
-            if (e.offsetX > center) ui.audio.currentTime += 5;
+            
+            if (clickX > center) ui.audio.currentTime += 5;
             else ui.audio.currentTime -= 5;
         });
 
@@ -620,11 +687,16 @@
             const height = ui.canvas.height;
             const center = width / 2;
             
+            // Get Device Pixel Ratio for sharp rendering
+            const dpr = window.devicePixelRatio || 1;
+            
             ctx.clearRect(0, 0, width, height);
             if (!ui.audio.duration) return;
 
-            const barWidth = 8; // Reduced from 12
-            const gap = 6; // Reduced from 8
+            // Scale visual elements by DPR
+            const barWidth = 8 * dpr; 
+            const gap = 6 * dpr;
+            const radius = 6 * dpr;
             const totalBarWidth = barWidth + gap;
             const waveData = state.waveform;
             
@@ -641,7 +713,7 @@
                 const y = (height - barHeight) / 2;
                 
                 ctx.beginPath();
-                ctx.roundRect(x, y, barWidth, barHeight, 6);
+                ctx.roundRect(x, y, barWidth, barHeight, radius);
                 
                 if (x < center - (barWidth/2)) {
                     ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
