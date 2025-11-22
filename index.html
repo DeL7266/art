@@ -662,22 +662,39 @@
 
         function resizeCanvas() {
             if(ui.canvas.parentElement) {
-                ui.canvas.width = ui.canvas.parentElement.offsetWidth;
-                ui.canvas.height = ui.canvas.parentElement.offsetHeight;
+                const dpr = window.devicePixelRatio || 1;
+                const rect = ui.canvas.parentElement.getBoundingClientRect();
+                
+                // Set actual size in memory (scaled to account for extra pixel density)
+                ui.canvas.width = rect.width * dpr;
+                ui.canvas.height = rect.height * dpr;
+                
+                // Normalize coordinate system to use css pixels
+                ui.canvas.style.width = `${rect.width}px`;
+                ui.canvas.style.height = `${rect.height}px`;
+                
+                const ctx = ui.canvas.getContext('2d');
+                ctx.scale(dpr, dpr);
             }
         }
         window.addEventListener('resize', () => { resizeCanvas(); drawWaveform(); });
 
         ui.canvas.addEventListener('click', (e) => {
-            const center = ui.canvas.width / 2;
+            // We need to use the logical width for click calculation
+            const dpr = window.devicePixelRatio || 1;
+            const width = ui.canvas.width / dpr;
+            const center = width / 2;
             if (e.offsetX > center) ui.audio.currentTime += 5;
             else ui.audio.currentTime -= 5;
         });
 
         function drawWaveform() {
             const ctx = ui.canvas.getContext('2d');
-            const width = ui.canvas.width;
-            const height = ui.canvas.height;
+            const dpr = window.devicePixelRatio || 1;
+            
+            // Use logical dimensions for calculation because context is scaled
+            const width = ui.canvas.width / dpr;
+            const height = ui.canvas.height / dpr;
             const center = width / 2;
             
             ctx.clearRect(0, 0, width, height);
@@ -701,7 +718,12 @@
                 const y = (height - barHeight) / 2;
                 
                 ctx.beginPath();
-                ctx.roundRect(x, y, barWidth, barHeight, 6);
+                // roundRect is supported in modern browsers; fallback not strictly needed for this env
+                if (ctx.roundRect) {
+                    ctx.roundRect(x, y, barWidth, barHeight, 6);
+                } else {
+                    ctx.rect(x, y, barWidth, barHeight);
+                }
                 
                 if (x < center - (barWidth/2)) {
                     ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
