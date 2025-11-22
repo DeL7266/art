@@ -117,7 +117,7 @@
 
         <div id="fallback-selector" class="hidden mt-8 bg-white/10 backdrop-blur-md p-6 rounded-xl border border-white/20 text-center max-w-sm animate-pulse">
             <p class="text-sm mb-4 text-red-300 font-semibold"><i class="fas fa-exclamation-triangle mr-2"></i>Auto-load failed</p>
-            <p class="text-xs text-gray-300 mb-4">Browser security blocked local folder access or files not found. Please select your files manually.</p>
+            <p class="text-xs text-gray-300 mb-4">Browser security blocked local folder access. Please select your files manually.</p>
             <label class="cursor-pointer bg-white text-black px-6 py-3 rounded-full font-bold hover:bg-gray-200 transition block">
                 Select MP3 Files
                 <input type="file" id="manual-file-input" accept=".mp3,audio/mpeg" multiple class="hidden" />
@@ -227,8 +227,7 @@
             isRepeat: false,
             waveform: [], 
             themeColor: [20, 20, 30],
-            userVerified: false, // Tracks if user clicked reCAPTCHA
-            abortController: null
+            userVerified: false // Tracks if user clicked reCAPTCHA
         };
 
         // Global Audio Context
@@ -275,14 +274,12 @@
         ui.manualFileInput.addEventListener('change', (e) => {
             const files = Array.from(e.target.files).filter(f => f.type.startsWith('audio/') || f.name.endsWith('.mp3'));
             if(files.length > 0) {
-                // Convert File objects to our internal format
-                state.playlist = files.map(f => ({
+                 // WRAP FILES
+                 state.playlist = files.map(f => ({
                     name: f.name,
                     url: URL.createObjectURL(f),
-                    blob: f, // We have the blob immediately for manual files
-                    isManual: true
+                    blob: f
                 }));
-                
                 setupPlayerAfterLoad();
                 ui.fallbackSelector.style.display = 'none';
                 // If user already verified, just close modal and play
@@ -312,9 +309,12 @@
                 state.userVerified = true;
 
                 // 3. Attempt to Start
+                // We wait a moment for visual satisfaction
                 setTimeout(() => {
                     if (state.playlist.length > 0) {
                         closeModalAndPlay();
+                    } else {
+                        // Playlist not ready yet (still fetching or failed)
                     }
                 }, 600); 
             }, 800);
@@ -323,14 +323,18 @@
         function closeModalAndPlay() {
             ui.startModal.classList.add('opacity-0', 'pointer-events-none');
             state.isPlaying = true;
+            // UPDATED ICON SIZE (Mobile: text-6xl)
             ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
             
-            if(!ui.audio.src || ui.audio.src === window.location.href) {
+            // If we haven't loaded the track src yet, loadTrack(0) handles it.
+            // If src is already set, just play.
+            if(!ui.audio.src || ui.audio.src === window.location.href || ui.audio.src === "") {
                 loadTrack(0);
             } else {
                 ui.audio.play().catch(e => console.log("Play prevented:", e));
             }
             
+            // Initialize Audio Context on user interaction
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             }
@@ -340,31 +344,67 @@
         }
 
         async function initPlayer() {
-            // Instant load: just register URLs
-            for (const fileName of config.files) {
+            let firstFileLoaded = false;
+
+            // We process files to create playlist structure
+            for (let i = 0; i < config.files.length; i++) {
+                const fileName = config.files[i];
                 const path = `${config.folder}/${fileName}`;
-                state.playlist.push({
+                
+                // Create track object with placeholder for blob
+                const track = {
                     name: fileName,
                     url: path,
-                    blob: null, // Will fetch on demand
-                    isManual: false
-                });
+                    blob: null
+                };
+
+                try {
+                    // We only fully download the first file to ensure system is working 
+                    // and to respect the loading screen timing/check.
+                    if (i === 0) {
+                         const response = await fetch(path);
+                         if (response.ok) {
+                             const blob = await response.blob();
+                             blob.name = fileName;
+                             track.blob = blob;
+                             
+                             state.playlist.push(track);
+                             firstFileLoaded = true;
+                             
+                             // Unlock UI as soon as first file is verified
+                             ui.loadingSpinner.classList.add('hidden');
+                             renderPlaylist();
+                             // Pre-load metadata for first track (don't play yet)
+                             loadTrack(0, false); 
+                             ui.recaptchaWidget.classList.remove('hidden');
+
+                             if(state.userVerified) closeModalAndPlay();
+                         } else {
+                             console.warn(`Could not load ${fileName}`);
+                         }
+                    } else {
+                        // For other files, we assume they exist to allow instant streaming
+                        // We push them immediately without fetching
+                        state.playlist.push(track);
+                        if (firstFileLoaded) renderPlaylist();
+                    }
+                } catch (error) {
+                    console.error(`Error checking ${fileName}:`, error);
+                }
             }
 
-            ui.loadingSpinner.classList.add('hidden');
-            
-            if (state.playlist.length > 0) {
-                setupPlayerAfterLoad();
-                ui.recaptchaWidget.classList.remove('hidden');
-            } else {
+            // If loop finishes and nothing loaded (meaning first file failed)
+            if (!firstFileLoaded) {
+                ui.loadingSpinner.classList.add('hidden');
                 ui.fallbackSelector.classList.remove('hidden');
                 ui.titleDesktop.innerText = "Select Files";
-                ui.artistDesktop.innerText = "Automatic loading blocked by browser or no files.";
+                ui.artistDesktop.innerText = "Automatic loading blocked by browser.";
             }
         }
 
         function setupPlayerAfterLoad() {
             renderPlaylist();
+            // Pre-load metadata for first track (don't play yet)
             loadTrack(0, false); 
         }
 
@@ -397,116 +437,110 @@
         function loadTrack(index, autoPlay = true) {
             if (!state.playlist[index]) return;
             
-            const item = state.playlist[index];
+            const track = state.playlist[index];
             
-            // Abort previous background fetch if it's running
-            if(state.abortController) {
-                state.abortController.abort();
-            }
-            state.abortController = new AbortController();
-
-            // Streaming URL
-            const srcUrl = item.url;
-            
-            if(ui.audio.src !== srcUrl && ui.audio.src !== window.location.origin + "/" + srcUrl) {
-                ui.audio.src = srcUrl;
+            // Stream from URL directly
+            // Check if src is already set to this URL to avoid reload
+            // Handle relative URLs by checking endsWith or full resolution
+            if(!ui.audio.src.includes(track.url)) {
+                ui.audio.src = track.url;
                 ui.audio.load();
             }
             
+            // Reset UI Time
             if(autoPlay) {
                  ui.currentTime.innerText = "0:00";
                  ui.totalDuration.innerText = "Loading...";
             }
 
-            // Highlight Playlist Item
+            // Update Active Playlist Item
             Array.from(ui.playlistItems.children).forEach((child, i) => {
                 if (i === index) child.classList.add('bg-white/20');
                 else child.classList.remove('bg-white/20');
             });
 
-            // Set Default Metadata immediately (instant feel)
-            const defaultTitle = item.name.replace(/\.mp3$/i, '');
+            // Metadata Default (Immediate)
+            const defaultTitle = track.name.replace(/\.mp3$/i, '');
             updateMetadataUI({
                 title: defaultTitle,
-                artist: "Unknown Artist",
-                album: "Loading info...",
+                artist: "Loading Info...",
+                album: "Please wait",
                 picture: null
             });
-
-            // Set Placeholder Waveform immediately
-            generateRandomWaveform();
-
-            // Background: Fetch Blob for Metadata & Waveform
-            if(item.blob) {
-                // If we already have the blob, use it
-                extractMetadata(item.blob, defaultTitle);
-                processAudioForWaveform(item.blob);
-            } else {
-                // Fetch in background
-                fetch(item.url, { signal: state.abortController.signal })
-                    .then(response => {
-                        if(!response.ok) throw new Error('Network response was not ok');
-                        return response.blob();
-                    })
-                    .then(blob => {
-                        blob.name = item.name;
-                        item.blob = blob; // Cache it
-                        extractMetadata(blob, defaultTitle);
-                        processAudioForWaveform(blob);
-                    })
-                    .catch(err => {
-                        if (err.name === 'AbortError') {
-                           // console.log('Fetch aborted');
-                        } else {
-                           console.error("Error loading track details:", err);
-                           ui.albumDesktop.innerText = "Streaming only";
+            
+            // Logic to process metadata and waveform
+            const processMetadata = (blob) => {
+                 // Read ID3 Tags
+                new jsmediatags.Reader(blob)
+                    .setTagsToRead(["title", "artist", "album", "picture"])
+                    .read({
+                        onSuccess: (tag) => {
+                            const tags = tag.tags;
+                            let pictureUrl = null;
+                            if (tags.picture) {
+                                const { data, format } = tags.picture;
+                                let base64String = "";
+                                for (let i = 0; i < data.length; i++) {
+                                    base64String += String.fromCharCode(data[i]);
+                                }
+                                pictureUrl = `data:${format};base64,${window.btoa(base64String)}`;
+                            }
+                            updateMetadataUI({
+                                title: tags.title || defaultTitle,
+                                artist: tags.artist || "Unknown Artist",
+                                album: tags.album || "Unknown Album",
+                                picture: pictureUrl
+                            });
+                        },
+                        onError: (error) => {
+                             updateMetadataUI({
+                                title: defaultTitle,
+                                artist: "Unknown Artist",
+                                album: "Unknown Album",
+                                picture: null
+                            });
                         }
                     });
+                    
+                // Generate Real Waveform
+                processAudioForWaveform(blob);
+            };
+
+            // Check if we have the blob cached
+            if (track.blob) {
+                processMetadata(track.blob);
+            } else {
+                // If not, show random waveform temporarily and fetch in background
+                generateRandomWaveform();
+                
+                // Background Fetch
+                fetch(track.url)
+                    .then(res => res.blob())
+                    .then(blob => {
+                        blob.name = track.name;
+                        track.blob = blob; // Cache it
+                        // Only update if we are still playing the same track
+                        if (state.playlist[state.currentIndex] === track) {
+                            processMetadata(blob);
+                        }
+                    })
+                    .catch(err => console.error("Background fetch failed for metadata:", err));
             }
             
             if (autoPlay && state.isPlaying) {
-                ui.audio.play().catch(e => {
-                    console.warn("Autoplay blocked:", e);
-                    state.isPlaying = false;
-                    ui.playBtn.innerHTML = '<i class="fas fa-play text-6xl md:text-7xl ml-1"></i>';
-                });
+                const playPromise = ui.audio.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(e => {
+                        console.warn("Autoplay blocked:", e);
+                        state.isPlaying = false;
+                        ui.playBtn.innerHTML = '<i class="fas fa-play text-6xl md:text-7xl ml-1"></i>';
+                    });
+                }
             }
-        }
-
-        function extractMetadata(fileBlob, defaultTitle) {
-            new jsmediatags.Reader(fileBlob)
-                .setTagsToRead(["title", "artist", "album", "picture"])
-                .read({
-                    onSuccess: (tag) => {
-                        const tags = tag.tags;
-                        let pictureUrl = null;
-                        if (tags.picture) {
-                            const { data, format } = tags.picture;
-                            let base64String = "";
-                            for (let i = 0; i < data.length; i++) {
-                                base64String += String.fromCharCode(data[i]);
-                            }
-                            pictureUrl = `data:${format};base64,${window.btoa(base64String)}`;
-                        }
-                        updateMetadataUI({
-                            title: tags.title || defaultTitle,
-                            artist: tags.artist || "Unknown Artist",
-                            album: tags.album || "Unknown Album",
-                            picture: pictureUrl
-                        });
-                    },
-                    onError: (error) => {
-                         // console.log(error);
-                    }
-                });
         }
 
         async function processAudioForWaveform(fileBlob) {
              // Use a temporary placeholder while processing
-             // Flat line
-             // state.waveform = new Array(200).fill(0.1);
-             // drawWaveform();
-
              try {
                 if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 
@@ -577,6 +611,7 @@
                 const rgb = `${color[0]}, ${color[1]}, ${color[2]}`;
                 
                 ui.bgLayer.style.background = `linear-gradient(135deg, rgba(${rgb}, 0.9) 0%, rgba(10,10,10,1) 100%)`;
+                // ui.playBtn.style.boxShadow = `0 0 30px rgba(${rgb}, 0.6)`; // Removed this line
             } catch (e) {}
         }
 
@@ -585,10 +620,12 @@
             if (ui.audio.paused) {
                 ui.audio.play();
                 state.isPlaying = true;
+                // UPDATED ICON SIZE (Mobile: text-6xl)
                 ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
             } else {
                 ui.audio.pause();
                 state.isPlaying = false;
+                // UPDATED ICON SIZE (Mobile: text-6xl)
                 ui.playBtn.innerHTML = '<i class="fas fa-play text-6xl md:text-7xl ml-1"></i>';
             }
         });
@@ -596,6 +633,7 @@
         ui.prevBtn.addEventListener('click', () => {
             state.currentIndex = (state.currentIndex - 1 + state.playlist.length) % state.playlist.length;
             state.isPlaying = true;
+            // UPDATED ICON SIZE (Mobile: text-6xl)
             ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
             loadTrack(state.currentIndex);
         });
@@ -607,6 +645,7 @@
                 state.currentIndex = (state.currentIndex + 1) % state.playlist.length;
             }
             state.isPlaying = true;
+            // UPDATED ICON SIZE (Mobile: text-6xl)
             ui.playBtn.innerHTML = '<i class="fas fa-pause text-6xl md:text-7xl"></i>';
             loadTrack(state.currentIndex);
         });
@@ -661,9 +700,11 @@
                 const dpr = window.devicePixelRatio || 1;
                 const rect = ui.canvas.parentElement.getBoundingClientRect();
                 
+                // Set actual size in memory (scaled to account for extra pixel density)
                 ui.canvas.width = rect.width * dpr;
                 ui.canvas.height = rect.height * dpr;
                 
+                // Normalize coordinate system to use css pixels
                 ui.canvas.style.width = `${rect.width}px`;
                 ui.canvas.style.height = `${rect.height}px`;
                 
@@ -674,6 +715,7 @@
         window.addEventListener('resize', () => { resizeCanvas(); drawWaveform(); });
 
         ui.canvas.addEventListener('click', (e) => {
+            // We need to use the logical width for click calculation
             const dpr = window.devicePixelRatio || 1;
             const width = ui.canvas.width / dpr;
             const center = width / 2;
@@ -685,24 +727,23 @@
             const ctx = ui.canvas.getContext('2d');
             const dpr = window.devicePixelRatio || 1;
             
+            // Use logical dimensions for calculation because context is scaled
             const width = ui.canvas.width / dpr;
             const height = ui.canvas.height / dpr;
             const center = width / 2;
             
             ctx.clearRect(0, 0, width, height);
-            
-            // If no audio source or not loaded, just return
-            // but we might want to draw the random waveform still?
-            if (!ui.audio.duration && state.waveform.length === 0) return;
+            if (!ui.audio.duration) return;
 
-            const barWidth = 8; 
-            const gap = 6; 
+            const barWidth = 8; // Reduced from 12
+            const gap = 6; // Reduced from 8
             const totalBarWidth = barWidth + gap;
             const waveData = state.waveform;
             
-            const progress = (ui.audio.duration > 0) ? (ui.audio.currentTime / ui.audio.duration) : 0;
+            const progress = ui.audio.currentTime / ui.audio.duration;
             const dataIndex = progress * (waveData.length - 1);
             
+            // Create Gradient for smooth transition across the whole canvas
             const gradient = ctx.createLinearGradient(0, 0, width, 0);
             gradient.addColorStop(0, 'rgba(255, 255, 255, 0.35)');
             gradient.addColorStop(0.49, 'rgba(255, 255, 255, 0.35)');
@@ -722,12 +763,14 @@
                 const barHeight = waveData[i] * (height * 0.8);
                 const y = (height - barHeight) / 2;
                 
+                // Batch all bars into one path
                 if (ctx.roundRect) {
                     ctx.roundRect(x, y, barWidth, barHeight, 6);
                 } else {
                     ctx.rect(x, y, barWidth, barHeight);
                 }
             }
+            // Fill all bars at once with the gradient
             ctx.fill();
         }
         
